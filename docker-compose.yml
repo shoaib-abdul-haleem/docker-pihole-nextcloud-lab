@@ -1,0 +1,77 @@
+# Pi-hole (DNS ad blocker), Nextcloud (private cloud) and MariaDB (database for Nextcloud).
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down
+#
+# Passwords and the VM address come from the .env file.
+# Copy .env.example to .env first and change the values.
+
+services:
+
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    ports:
+      # DNS is bound to the VM's own address. Ubuntu's systemd-resolved already
+      # uses 127.0.0.53:53, so a plain "53:53" would fail with "address already in use".
+      - "${HOST_IP:?Copy .env.example to .env first}:53:53/tcp"
+      - "${HOST_IP}:53:53/udp"
+      # Admin page: http://<HOST_IP>:8081/admin
+      - "8081:80/tcp"
+    environment:
+      TZ: ${TZ}
+      FTLCONF_webserver_api_password: ${PIHOLE_PASSWORD}
+      # Answer DNS queries from other machines, not only from inside the Docker network.
+      FTLCONF_dns_listeningMode: all
+    volumes:
+      - pihole_data:/etc/pihole
+    restart: unless-stopped
+
+  db:
+    image: mariadb:10.11
+    container_name: nextcloud_db
+    # Settings recommended by Nextcloud for MariaDB.
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    # Nextcloud must wait until the database is really ready, not only started.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # There is no "ports" entry on purpose. Only the other containers can reach the database.
+
+  nextcloud:
+    image: nextcloud:apache
+    container_name: nextcloud
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Nextcloud: http://<HOST_IP>:8080
+      - "8080:80"
+    environment:
+      # "db" is the service name. Inside the Docker network it works as a hostname.
+      MYSQL_HOST: db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NC_ADMIN_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: ${HOST_IP}
+    volumes:
+      - nextcloud_data:/var/www/html
+    restart: unless-stopped
+
+# Named volumes keep the data when a container is deleted and created again.
+volumes:
+  pihole_data:
+  db_data:
+  nextcloud_data:
